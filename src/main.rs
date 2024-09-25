@@ -72,6 +72,7 @@ struct PretendoElement {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "snake_case", deserialize = "camelCase"))]
 pub struct Pretendo {
+    id: Option<i32>,
     path: String,
     return_object: String,
     #[serde(deserialize_with = "deserialize_string_from_number")]
@@ -82,6 +83,7 @@ pub struct Pretendo {
 impl Pretendo {
     fn new() -> Self {
         Self {
+            id: None,
             path: String::default(),
             return_object: String::default(),
             status_code: String::default(),
@@ -309,7 +311,7 @@ impl PretendosList for MyApp{
                 ui.add_space(15.0);
                 ui.add_sized(egui::vec2(220.0, 30.0), |ui: &mut Ui| {
                     let element = Button::new("💾 Save pretendo");
-                    let output = ui.add(element).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let output = ui.add_enabled(self.current_pretendo.id.is_none(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
                     if output.clicked() {
                         let replaced_return_object = self.current_pretendo.return_object.clone().replace("\n", "").replace("\"", "'");
                         let pretendo_creation = 
