@@ -32,5 +32,6 @@ jobs:
         # Name of the artifact to download. If unspecified, all artifacts for the run are downloaded.
         name: executable
         # Destination path. Supports basic tilde expansion. Defaults to $GITHUB_WORKSPACE
+        path: ${{ github.workspace }}/artifacts
 
           
