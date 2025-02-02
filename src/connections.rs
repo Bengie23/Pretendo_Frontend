@@ -4,6 +4,36 @@ pub mod http {
     pub struct PretendoHttpClient;
     
     impl PretendoHttpClient {
+        pub  async fn backend_alive() ->bool {
+            let mut alive = false;
+            let client = reqwest::Client::new();
+            let url = "http://pretendo.local/pretendo/ping";
+            let response = client
+                .get(url)
+                .header("Content-Type", "application/json")
+                .send()
+                .await;
+            match response {
+                Ok(result) => {
+                    println!("Status Code: {}", result.status());
+        
+                    let response_body = result.text().await.unwrap();
+        
+                    println!("Response body: \n{}", response_body);
+
+                    if response_body == "pong"
+                    {
+                        alive = true;
+                    }
+                },
+                Err(_error) => {
+
+                    println!("error calling pretendo/ping");
+                }
+            }
+            return alive;
+        }
+
         pub  async fn get_domains() ->Vec<String> {
             let client = reqwest::Client::new();
             let mut domains = Vec::new();

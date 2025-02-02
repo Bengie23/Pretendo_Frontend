@@ -1,4 +1,6 @@
 mod connections;
+use std::{thread, time};
+
 use eframe::egui::{self, Button, CentralPanel, SidePanel, TextEdit, TopBottomPanel, Visuals};
 use connections::http::PretendoHttpClient;
 use futures::executor::block_on;
@@ -30,6 +32,7 @@ async fn main() -> eframe::Result {
 
 #[derive(Clone, Debug)]
 struct MyApp {
+    backend_alive: bool,
     theme: Visuals,
     data: Vec<PretendoElement>,
     current_domain: String,
@@ -44,7 +47,6 @@ pub trait Associator {
 }
 
 impl Associator for MyApp {
-    
     fn get_associated_pretendos(&self, domain: String) -> Vec<Pretendo> {
         let mut result = Vec::new();
         let elements = self.data.clone();
@@ -54,12 +56,8 @@ impl Associator for MyApp {
             }
         }
         return result;
-
     }
-
-    
 }
-
 
 
 #[derive(Clone)]
@@ -100,6 +98,7 @@ impl Default for MyApp {
             pretendos.push(PretendoElement { domain: domain, pretendos: [Pretendo::new()].to_vec()})
         }
         Self {
+            backend_alive: block_on(PretendoHttpClient::backend_alive()),
             theme: Visuals::dark(),
             data: pretendos,
             current_domain: String::default(),
@@ -114,15 +113,17 @@ impl Default for MyApp {
 impl eframe::App for MyApp {     
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_pixels_per_point(1.5);
-        
-        self.configure_new_domain_window(ctx);
-
-        self.display_header(ctx);
-
-        self.display_domains_list(ctx);
-        
-        self.display_pretendos_list(ctx);
-        
+        // println!("{}", self.backend_alive);
+        match self.backend_alive {
+            true => {
+                self.configure_new_domain_window(ctx);
+                self.display_header(ctx);
+                self.display_domains_list(ctx);
+                self.display_pretendos_list(ctx);                
+            },
+            false => {self.display_loader(ctx)},
+        }
+         ctx.clear_animations();   
     }
 }
 pub fn validate_status_code(s: &mut String) {
@@ -201,7 +202,7 @@ impl DomainsList for MyApp {
         if !self.display_new_domain{
             let domains: Vec<String> = self.data.clone().into_iter().map(|element| element.domain).collect();
             let lengths: Vec<i32> = domains.clone().into_iter().map(|element| element.len() as i32).collect();
-            let max = lengths.iter().max().unwrap();
+            let max = lengths.iter().max().unwrap_or(&1);
             let default_width = max * 10;
             SidePanel::left("left_panel").exact_width(default_width as f32).show(ctx, |ui| {
                 ui.heading("Domains");
@@ -342,5 +343,36 @@ impl PretendosList for MyApp{
                 });
             });
         }
+    }
+}
+
+pub trait BackendAlive {
+    fn is_backend_alive(& mut self, ctx: &egui::Context) -> bool;
+}
+
+impl BackendAlive for MyApp {
+    fn is_backend_alive(& mut self, _ctx: &egui::Context) -> bool {
+        return block_on(PretendoHttpClient::backend_alive());
+    }
+}
+
+pub trait PretendoLoader {
+    fn display_loader(&mut self, ctx: &egui::Context);
+}
+
+impl PretendoLoader for MyApp {
+    fn display_loader(&mut self, ctx: &egui::Context) {
+        TopBottomPanel::top("top_panel_0").show_animated(ctx,!self.backend_alive, |ui| {
+            ui.heading("Pretendo App    🐼");
+            ui.label(r#"Backend not runnning....
+            - Pretendo Backend must be running for the PRETENDO UI to work."#);
+            let button_widget = egui::Button::new("Reload ↻");                    
+                    
+            let button_response = ui.add_enabled(true, button_widget).on_hover_cursor(egui::CursorIcon::PointingHand);
+
+            if button_response.clicked() {
+                self.backend_alive = block_on(PretendoHttpClient::backend_alive());
+            }
+        });
     }
 }
