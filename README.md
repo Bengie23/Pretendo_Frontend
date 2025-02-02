@@ -1,5 +1,5 @@
 # What is Pretendo Frontend?
-Pretendo Frontend is the UI for the Pretendo APP(desktop). It requires Pretendo Backend to run locally in order to work.
+Pretendo Frontend is the UI for the Pretendo APP(desktop). It requires Pretendo Backend to run locally in order to work [More Info](https://github.com/Bengie23/Pretendo.Backend).
 
 # What is Pretendo App for?
 Pretendo App is small, but cool http mock server that runs locally by catching http calls from your local network and preventing them to reach out the internet. 
