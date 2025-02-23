@@ -11,7 +11,6 @@ use regex::Regex;
 
 #[tokio::main]
 async fn main() -> eframe::Result {
-    logger::debug::println!("TEST");
     let options = eframe::NativeOptions {
         centered: true,
         viewport: egui::ViewportBuilder::default().with_resizable(true).with_maximize_button(false).with_inner_size([1000.0, 600.0]).with_min_inner_size([840.0,600.0]),        
@@ -42,7 +41,7 @@ struct MyApp {
     display_new_pretendo: bool,
     pretendos_in_current_domain: Vec<Pretendo>,
     display_configure_webhooks: bool,
-    webhooks_in_current_pretendo: Vec<String>,
+    webhooks_in_current_pretendo: Vec<Webhook>,
     current_webhook_url:String,
     current_webhook_payload: String,
     
@@ -84,6 +83,13 @@ pub struct Pretendo {
     name: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "snake_case", deserialize = "camelCase"))]
+pub struct Webhook {
+    url: String,
+    payload: String,
+}
+
 impl Pretendo {
     fn new() -> Self {
         Self {
@@ -123,7 +129,6 @@ impl Default for MyApp {
 impl eframe::App for MyApp {     
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_pixels_per_point(1.5);
-        // println!("{}", self.backend_alive);
         match self.backend_alive {
             true => {
                 self.configure_new_webhook_window(ctx);
@@ -230,6 +235,9 @@ impl DomainsList for MyApp {
                     let label = egui::SelectableLabel::new(self.current_domain == *domain, domain);
                     let label_response = ui.add_sized(egui::vec2(ui.available_size().x, 20.0), label).on_hover_cursor(egui::CursorIcon::PointingHand);
                     if label_response.clicked() {
+                        self.webhooks_in_current_pretendo = Vec::new();
+                        self.current_webhook_payload = String::new();
+                        self.current_webhook_url = String::new();
                         self.display_new_pretendo = false;
                         self.current_pretendo = Pretendo::new();
                         self.current_domain = domain.clone();
@@ -326,7 +334,7 @@ impl PretendosList for MyApp{
                         let element = Button::new("💾 Save pretendo");
                         let output = ui.add_enabled(self.current_pretendo.id.is_none(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
                         if output.clicked() {
-                            let replaced_return_object = self.current_pretendo.return_object.clone().replace("\n", "").replace("\"", "'");
+                            let replaced_return_object = self.current_pretendo.return_object.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
                             let pretendo_creation = 
                                 PretendoHttpClient::add_pretendo(
                                     &self.current_domain, 
@@ -357,7 +365,22 @@ impl PretendosList for MyApp{
                         let element = Button::new("Configure Webhook(s)");
                         let output = ui.add_enabled(self.current_pretendo.id.is_some(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
                         if output.clicked() {
-                            println!("Configuring webhooks");
+                            logger::debug::println!("Configuring webhooks");
+                            let json_response = block_on(connections::http::PretendoHttpClient::get_webhooks(&self.current_pretendo.id.unwrap()));
+                            if let Some(json_response) = json_response {
+                                let webhooks: Vec<Webhook> = serde_json::from_str(&json_response).unwrap();
+                                logger::debug::println!("webhooks for current pretendo {:?}",webhooks);
+                                self.webhooks_in_current_pretendo = webhooks;
+                                if self.webhooks_in_current_pretendo.len() > 0 {
+                                    let current_webhook = self.webhooks_in_current_pretendo.first().cloned().unwrap();
+                                    self.current_webhook_payload = current_webhook.payload;
+                                    self.current_webhook_url = current_webhook.url;
+                                }
+                                else{
+                                    self.current_webhook_payload = String::new();
+                                    self.current_webhook_url = String::new();
+                                }
+                            }
                             self.display_configure_webhooks = true;
                         }
                         output
@@ -425,7 +448,7 @@ impl NewWebhookWindow for MyApp {
                     .font(egui::TextStyle::Monospace) // for cursor height
                     .code_editor()
                     .desired_rows(10)
-                    .lock_focus(true)
+                    .lock_focus(false)
                     .desired_width(f32::INFINITY);
                     // .layouter(&mut layouter),
                     ui.add(egui::Label::new(sized_text("Payload:", 1)));
@@ -436,7 +459,7 @@ impl NewWebhookWindow for MyApp {
                     
                 });
                 ui.add_space(5.0);
-                let enabled = !self.current_webhook_url.is_empty();
+                let enabled = self.webhooks_in_current_pretendo.len() == 0 || !self.current_webhook_url.is_empty();
 
                 let button_widget = egui::Button::new("Save Webhook configuration");                    
                 
@@ -444,7 +467,14 @@ impl NewWebhookWindow for MyApp {
 
                 if button_response.clicked(){
                     if !self.current_webhook_url.is_empty(){
+                        let fixed_payload = self.current_webhook_payload.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
+                        let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload)).unwrap();
+                        logger::debug::println!("attempted to save webhook, success: {:?}", success);
                         should_display = false;
+                        if success{
+                            self.current_webhook_url = String::new();
+                            self.current_webhook_payload = String::new();
+                        }
                     }
                 }
             });
