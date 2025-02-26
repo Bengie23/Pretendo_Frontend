@@ -2,14 +2,15 @@
 
 mod connections;
 mod logger;
+mod data;
 
 use eframe::egui::{self, Button, CentralPanel, SidePanel, TextEdit, TopBottomPanel, Visuals};
 use connections::http::PretendoHttpClient;
 use futures::executor::block_on;
-use serde::{Deserialize, Serialize};
-use serde_aux::prelude::*;
 use egui::Ui;
 use regex::Regex;
+use serde_json::Value;
+use data::entities::{Pretendo, Webhook, PretendoElement };
 
 #[tokio::main]
 async fn main() -> eframe::Result {
@@ -67,42 +68,7 @@ impl Associator for MyApp {
 }
 
 
-#[derive(Clone)]
-#[derive(Debug)]
-struct PretendoElement {
-    domain: String,
-    pretendos: Vec<Pretendo>,
-}
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all(serialize = "snake_case", deserialize = "camelCase"))]
-pub struct Pretendo {
-    id: Option<i32>,
-    path: String,
-    return_object: String,
-    #[serde(deserialize_with = "deserialize_string_from_number")]
-    status_code:  String,
-    name: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all(serialize = "snake_case", deserialize = "camelCase"))]
-pub struct Webhook {
-    url: String,
-    payload: String,
-}
-
-impl Pretendo {
-    fn new() -> Self {
-        Self {
-            id: None,
-            path: String::default(),
-            return_object: String::default(),
-            status_code: String::default(),
-            name: String::default(),
-        }
-    }
-}
 impl Default for MyApp {
     fn default() -> Self {
         let mut pretendos = Vec::new();
@@ -321,7 +287,9 @@ impl PretendosList for MyApp{
                         ui.add(egui::Label::new(sized_text("Return Object:", 1)));
                         
                         let win_rect = ctx.input(|i: &egui::InputState| i.screen_rect());
-                        ui.add_sized(egui::vec2(ui.available_size().x - margin_right, ui.available_size().y + (win_rect.height() - 400.0)), TextEdit::multiline(&mut self.current_pretendo.return_object));
+                        ui.add_sized(
+                            egui::vec2(ui.available_size().x - margin_right, ui.available_size().y + (win_rect.height() - 400.0)), 
+                            TextEdit::multiline(&mut self.current_pretendo.return_object).code_editor());
                         
                     });
                     ui.add_space(5.0);
@@ -359,6 +327,9 @@ impl PretendosList for MyApp{
                                         if just_created.is_some(){
                                             self.current_pretendo = just_created.unwrap().clone();
                                             self.display_new_pretendo = true;
+                                            let json = self.current_pretendo.return_object.clone();
+                                            let v: Value = serde_json::from_str(&json).unwrap();
+                                            self.current_pretendo.return_object =  serde_json::to_string_pretty(&v.to_string()).unwrap();
                                         }
                                     }
                                 }

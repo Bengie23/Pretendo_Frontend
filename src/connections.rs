@@ -131,7 +131,7 @@ pub mod http {
 
             let response = client
                 .post(url)
-                .header("Content-Type", "application/json")
+                .header("Content-Type", "application/json; charset=utf-8")
                 .body(json_data.to_owned())
                 .send()
                 .await;
