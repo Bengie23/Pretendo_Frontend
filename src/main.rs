@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 
 mod connections;
 mod logger;
@@ -327,9 +327,9 @@ impl PretendosList for MyApp{
                                         if just_created.is_some(){
                                             self.current_pretendo = just_created.unwrap().clone();
                                             self.display_new_pretendo = true;
-                                            let json = self.current_pretendo.return_object.clone();
-                                            let v: Value = serde_json::from_str(&json).unwrap();
-                                            self.current_pretendo.return_object =  serde_json::to_string_pretty(&v.to_string()).unwrap();
+                                            // let json = self.current_pretendo.return_object.clone();
+                                            // let v: Value = serde_json::from_str(&json).unwrap();
+                                            // self.current_pretendo.return_object =  serde_json::to_string_pretty(&v.to_string()).unwrap();
                                         }
                                     }
                                 }
