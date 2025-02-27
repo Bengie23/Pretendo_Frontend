@@ -121,6 +121,7 @@ pub mod http {
             }
             return webhooks;
         }
+        
         pub async fn add_pretendo(domain: &String, path: &String, return_object: &String, name: &String, status_code: &String) ->Result<bool,Error> {
             let url = format!("http://pretendo.local/api/domain/{}/pretendos", domain);
             let return_object_json = format!(r#"{}"#, return_object);
@@ -151,6 +152,7 @@ pub mod http {
             }
             
         }
+        
         pub async fn add_webhook(pretendo_id: &i32, webhook_url: &String, payload: &String) ->Result<bool,Error>{
             let url = format!("http://pretendo.local/api/pretendo/{}/webhooks", pretendo_id);
             let payload_json = format!(r#"{}"#, payload);

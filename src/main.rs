@@ -289,7 +289,7 @@ impl PretendosList for MyApp{
                         let win_rect = ctx.input(|i: &egui::InputState| i.screen_rect());
                         ui.add_sized(
                             egui::vec2(ui.available_size().x - margin_right, ui.available_size().y + (win_rect.height() - 400.0)), 
-                            TextEdit::multiline(&mut self.current_pretendo.return_object).code_editor());
+                            TextEdit::multiline(&mut self.current_pretendo.return_object).code_editor().lock_focus(false));
                         
                     });
                     ui.add_space(5.0);
@@ -435,7 +435,7 @@ impl NewWebhookWindow for MyApp {
                     
                 });
                 ui.add_space(5.0);
-                let enabled = self.webhooks_in_current_pretendo.len() == 0 || !self.current_webhook_url.is_empty();
+                let enabled = self.webhooks_in_current_pretendo.len() == 0;
 
                 let button_widget = egui::Button::new("Save Webhook configuration");                    
                 
