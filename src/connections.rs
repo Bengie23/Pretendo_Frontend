@@ -41,7 +41,7 @@ pub mod http {
         pub  async fn get_domains() ->Vec<String> {
             let client = reqwest::Client::new();
             let mut domains = Vec::new();
-            let url = "http://pretendo.local/api/domain";
+            let url = "http://pretendo.local/api/domains";
             let response = client
                 .get(url)
                 .header("Content-Type", "application/json")
