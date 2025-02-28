@@ -1,4 +1,10 @@
-// #![windows_subsystem = "windows"]
+#![cfg_attr(
+    all(
+      target_os = "windows",
+      not(debug_assertions),
+    ),
+    windows_subsystem = "windows"
+  )]
 
 mod connections;
 mod logger;
@@ -9,14 +15,13 @@ use connections::http::PretendoHttpClient;
 use futures::executor::block_on;
 use egui::Ui;
 use regex::Regex;
-use serde_json::Value;
-use data::entities::{Pretendo, Webhook, PretendoElement };
+use data::entities::{HttpVerbs, Pretendo, PretendoElement, Webhook };
 
 #[tokio::main]
 async fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         centered: true,
-        viewport: egui::ViewportBuilder::default().with_resizable(true).with_maximize_button(false).with_inner_size([1000.0, 600.0]).with_min_inner_size([840.0,600.0]),        
+        viewport: egui::ViewportBuilder::default().with_resizable(true).with_maximize_button(false).with_inner_size([1000.0, 700.0]).with_min_inner_size([840.0,700.0]),        
         ..Default::default()
     };
     
@@ -47,6 +52,9 @@ struct MyApp {
     webhooks_in_current_pretendo: Vec<Webhook>,
     current_webhook_url:String,
     current_webhook_payload: String,
+    current_webhook_http_verb: Option<HttpVerbs>,
+    current_webhook_is_get:bool,
+    current_webhook_is_post:bool,
     
 }
 
@@ -90,13 +98,15 @@ impl Default for MyApp {
             display_configure_webhooks: false,
             current_webhook_url:String::default(),
             current_webhook_payload: String::default(),
+            current_webhook_http_verb: None,
+            current_webhook_is_get: false,
+            current_webhook_is_post: false,
         }
     }
 }
 
 impl eframe::App for MyApp {     
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.set_pixels_per_point(1.5);
         match self.backend_alive {
             true => {
                 self.configure_new_webhook_window(ctx);
@@ -107,7 +117,9 @@ impl eframe::App for MyApp {
             },
             false => {self.display_loader(ctx)},
         }
-         ctx.clear_animations();   
+        
+        ctx.set_pixels_per_point(1.5);
+        ctx.clear_animations();   
     }
 }
 pub fn validate_status_code(s: &mut String) {
@@ -240,12 +252,24 @@ impl PretendosList for MyApp{
                         if selectable_label.clicked(){
                             self.display_new_pretendo = true;
                             self.current_pretendo = pretendo;
+                            self.webhooks_in_current_pretendo = Vec::new();
+                            self.current_webhook_is_get =false;
+                            self.current_webhook_is_post = false;
+                            self.current_webhook_http_verb = None;
+                            self.current_webhook_payload = String::new();
+                            self.current_webhook_url = String::new();
+
                         }
                     }
                     let button = ui.button("➕ New Pretendo").on_hover_cursor(egui::CursorIcon::PointingHand);
                     if button.clicked() {
                         self.display_new_pretendo = true;
                         self.current_pretendo = Pretendo::new();
+                        self.current_webhook_is_get =false;
+                        self.current_webhook_is_post = false;
+                        self.current_webhook_http_verb = None;
+                        self.current_webhook_payload = String::new();
+                        self.current_webhook_url = String::new();
                     }
     
                 });
@@ -342,6 +366,7 @@ impl PretendosList for MyApp{
                             if output.clicked() {
                                 logger::debug::println!("Configuring webhooks");
                                 let json_response = block_on(connections::http::PretendoHttpClient::get_webhooks(&self.current_pretendo.id.unwrap()));
+                                logger::debug::println!("{:?}", json_response);
                                 if let Some(json_response) = json_response {
                                     let webhooks: Vec<Webhook> = serde_json::from_str(&json_response).unwrap();
                                     logger::debug::println!("webhooks for current pretendo {:?}",webhooks);
@@ -350,10 +375,12 @@ impl PretendosList for MyApp{
                                         let current_webhook = self.webhooks_in_current_pretendo.first().cloned().unwrap();
                                         self.current_webhook_payload = current_webhook.payload;
                                         self.current_webhook_url = current_webhook.url;
+                                        self.current_webhook_http_verb = Some(current_webhook.http_verb);
                                     }
                                     else{
                                         self.current_webhook_payload = String::new();
                                         self.current_webhook_url = String::new();
+                                        self.current_webhook_http_verb = None;
                                     }
                                 }
                                 self.display_configure_webhooks = true;
@@ -398,16 +425,24 @@ impl PretendoLoader for MyApp {
     }
 }
 
-pub trait NewWebhookWindow
-{
+pub trait NewWebhookWindow{
     fn configure_new_webhook_window(&mut self, ctx: &egui::Context);
 }
 
 impl NewWebhookWindow for MyApp {
     fn configure_new_webhook_window(&mut self, ctx: &egui::Context) {
         let mut should_display = self.display_configure_webhooks;
+        if self.current_webhook_http_verb.is_some(){
+            let current_value = self.current_webhook_http_verb.clone().unwrap();
+            if current_value == HttpVerbs::GET{
+                self.current_webhook_is_get = true;
+            }
+            if current_value == HttpVerbs::POST{
+                self.current_webhook_is_post = true;
+            }
+        }
         if  should_display {
-            egui::Window::new("Configure Webhooks")
+            let webhook_window = egui::Window::new("Configure Webhooks")
             .collapsible(false)
             .open(&mut self.display_configure_webhooks)
             .show(ctx, |ui| {
@@ -416,6 +451,28 @@ impl NewWebhookWindow for MyApp {
                     let text_response = ui.add_sized(egui::vec2(ui.available_size().x ,20.0), egui::TextEdit::singleline(&mut self.current_webhook_url));
                     if text_response.changed() {
                         //validate_status_code(&mut self.current_pretendo.status_code);
+                    }
+                });
+
+                ui.add_space(2.5);
+                ui.horizontal(|ui| {
+                ui.add(egui::Label::new(sized_text("Verb:", 8)));
+
+                    let get_option = ui.checkbox(&mut self.current_webhook_is_get, "HTTP GET");
+                    if get_option.clicked(){
+                        if self.current_webhook_is_get
+                        {
+                            self.current_webhook_http_verb = Some(HttpVerbs::GET); 
+                            self.current_webhook_is_post = false;   
+                        }
+                    }
+                    let post_option = ui.checkbox(&mut self.current_webhook_is_post, "HTTP POST");
+                    if post_option.clicked(){
+                        if self.current_webhook_is_post
+                        {
+                            self.current_webhook_http_verb = Some(HttpVerbs::POST);
+                            self.current_webhook_is_get = false; 
+                        }
                     }
                 });
                 ui.add_space(5.0);
@@ -427,15 +484,21 @@ impl NewWebhookWindow for MyApp {
                     .lock_focus(false)
                     .desired_width(f32::INFINITY);
                     // .layouter(&mut layouter),
+
                     ui.add(egui::Label::new(sized_text("Payload:", 1)));
                     
                     egui::ScrollArea::vertical().min_scrolled_height(300.0).show(ui, |ui| {
-                        ui.add_sized(egui::vec2(ui.available_size().x, 300.0), widget);
+
+                        ui.add_sized(egui::vec2(ui.available_size().x, 300.0), |ui: &mut Ui|{
+                            let enabled_widget = ui.add_enabled(  self.current_webhook_is_post, widget);
+                            
+                            return enabled_widget;
+                        });
                     });
                     
                 });
                 ui.add_space(5.0);
-                let enabled = self.webhooks_in_current_pretendo.len() == 0;
+                let enabled = self.webhooks_in_current_pretendo.len() == 0 && !self.current_webhook_url.is_empty() && (self.current_webhook_is_get || self.current_webhook_is_post);
 
                 let button_widget = egui::Button::new("Save Webhook configuration");                    
                 
@@ -444,16 +507,27 @@ impl NewWebhookWindow for MyApp {
                 if button_response.clicked(){
                     if !self.current_webhook_url.is_empty(){
                         let fixed_payload = self.current_webhook_payload.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
-                        let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload)).unwrap();
+                        let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload, &self.current_webhook_http_verb.clone().unwrap())).unwrap();
                         logger::debug::println!("attempted to save webhook, success: {:?}", success);
                         should_display = false;
                         if success{
                             self.current_webhook_url = String::new();
                             self.current_webhook_payload = String::new();
+                            self.current_webhook_is_get = false;
+                            self.current_webhook_is_post = false;
+                            self.current_webhook_http_verb = None;
                         }
                     }
                 }
             });
+            //close window event
+            if webhook_window.is_none(){
+                self.current_webhook_url = String::new();
+                self.current_webhook_payload = String::new();
+                self.current_webhook_is_get = false;
+                self.current_webhook_is_post = false;
+                self.current_webhook_http_verb = None;
+            }
         }
         self.display_configure_webhooks &= should_display;
     }

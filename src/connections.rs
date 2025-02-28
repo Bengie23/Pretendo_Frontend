@@ -3,7 +3,7 @@
 pub mod http {
     use reqwest::Error;
 
-    use crate::logger;
+    use crate::{data::entities::HttpVerbs, logger};
  
     pub struct PretendoHttpClient;
     
@@ -112,7 +112,9 @@ pub mod http {
         
                     logger::debug::println!("Response body: \n{}", response_body);
 
-                    webhooks = Some(response_body);
+                    if response_body != "[]"{
+                        webhooks = Some(response_body);
+                    }
 
                 },
                 Err(_error) => {
@@ -153,10 +155,10 @@ pub mod http {
             
         }
         
-        pub async fn add_webhook(pretendo_id: &i32, webhook_url: &String, payload: &String) ->Result<bool,Error>{
+        pub async fn add_webhook(pretendo_id: &i32, webhook_url: &String, payload: &String, verb: &HttpVerbs) ->Result<bool,Error>{
             let url = format!("http://pretendo.local/api/pretendo/{}/webhooks", pretendo_id);
             let payload_json = format!(r#"{}"#, payload);
-            let json_data = format!(r##"{{ "url":"{}","payload":"{}"}}"##, webhook_url, payload_json);
+            let json_data = format!(r##"{{ "url":"{}","payload":"{}", "httpVerb":"{}"}}"##, webhook_url, payload_json, verb);
             logger::debug::println!("{}", json_data);
             
             let client = reqwest::Client::new();

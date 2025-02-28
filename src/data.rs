@@ -1,5 +1,7 @@
 pub mod entities
 {
+    use std::fmt;
+
     use serde::{Deserialize, Serialize};
     use serde_aux::prelude::*;
 
@@ -26,6 +28,7 @@ pub mod entities
     pub struct Webhook {
         pub url: String,
         pub payload: String,
+        pub http_verb: HttpVerbs,
     }
 
     impl Pretendo {
@@ -36,6 +39,20 @@ pub mod entities
                 return_object: String::default(),
                 status_code: String::default(),
                 name: String::default(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    pub enum HttpVerbs {
+        GET,
+        POST,
+    }
+    impl fmt::Display for HttpVerbs {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            match *self {
+                HttpVerbs::GET => write!(f, "GET"),
+                HttpVerbs::POST => write!(f, "POST"),
             }
         }
     }
