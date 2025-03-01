@@ -16,6 +16,7 @@ use futures::executor::block_on;
 use egui::Ui;
 use regex::Regex;
 use data::entities::{HttpVerbs, Pretendo, PretendoElement, Webhook };
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 #[tokio::main]
 async fn main() -> eframe::Result {
@@ -24,24 +25,26 @@ async fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default().with_resizable(true).with_maximize_button(false).with_inner_size([1000.0, 700.0]).with_min_inner_size([840.0,700.0]),        
         ..Default::default()
     };
-    
+    let (tx_gui, rx_gui) = mpsc::unbounded_channel::<String>();
+    let theme = Visuals::dark();
     eframe::run_native(
         "Pretendo App",
         options,
         Box::new(|cc| {
-            // This gives us image support:
-            // egui_extras::install_image_loaders(&cc.egui_ctx);
-            cc.egui_ctx.set_visuals(MyApp::default().theme);
-            Ok(Box::<MyApp>::default())
+            let mut app = MyApp::new(rx_gui,tx_gui);
+            app.populate_data();
+            cc.egui_ctx.set_visuals(theme);
+            cc.egui_ctx.set_pixels_per_point(1.5);
+            
+            Ok(Box::<MyApp>::new(app))
         }),
     )
 }
 
 
-#[derive(Clone, Debug)]
+#[derive( Debug)]
 struct MyApp {
     backend_alive: bool,
-    theme: Visuals,
     data: Vec<PretendoElement>,
     current_domain: String,
     current_pretendo: Pretendo,
@@ -55,11 +58,15 @@ struct MyApp {
     current_webhook_http_verb: Option<HttpVerbs>,
     current_webhook_is_get:bool,
     current_webhook_is_post:bool,
+    running_backend_ping_pong:bool,
+    rx_gui: UnboundedReceiver<String>,
+    tx_gui: UnboundedSender<String>,
     
 }
 
 pub trait Associator {
     fn get_associated_pretendos(&self, domain: String) -> Vec<Pretendo>;
+    fn populate_data(&mut self);
 }
 
 impl Associator for MyApp {
@@ -73,22 +80,29 @@ impl Associator for MyApp {
         }
         return result;
     }
+    
+    fn populate_data(&mut self) {
+        if self.backend_alive {
+            println!("populating data");
+            let mut pretendos = Vec::new();
+            let domains_call = PretendoHttpClient::get_domains();
+            let domains = block_on(domains_call);
+            for domain in domains {
+                pretendos.push(PretendoElement { domain: domain, pretendos: [Pretendo::new()].to_vec()})
+            }
+            self.data = pretendos;
+
+        }
+    }
 }
 
 
 
-impl Default for MyApp {
-    fn default() -> Self {
-        let mut pretendos = Vec::new();
-        let domains_call = PretendoHttpClient::get_domains();
-        let domains = block_on(domains_call);
-        for domain in domains {
-            pretendos.push(PretendoElement { domain: domain, pretendos: [Pretendo::new()].to_vec()})
-        }
+impl MyApp {
+    fn new(rx: UnboundedReceiver<String>, tx:UnboundedSender<String>) -> Self {
         Self {
-            backend_alive: block_on(PretendoHttpClient::backend_alive()),
-            theme: Visuals::dark(),
-            data: pretendos,
+            backend_alive: block_on(PretendoHttpClient::backend_alive()) || false,
+            data: Vec::new(),
             current_domain: String::default(),
             display_new_pretendo: false,
             current_pretendo: Pretendo::new(),
@@ -101,13 +115,17 @@ impl Default for MyApp {
             current_webhook_http_verb: None,
             current_webhook_is_get: false,
             current_webhook_is_post: false,
+            running_backend_ping_pong: false,
+            tx_gui: tx,
+            rx_gui: rx,
+
         }
     }
 }
 
 impl eframe::App for MyApp {     
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        match self.backend_alive {
+        match self.backend_alive && self.data.len() > 0 {
             true => {
                 self.configure_new_webhook_window(ctx);
                 self.configure_new_domain_window(ctx);
@@ -115,11 +133,12 @@ impl eframe::App for MyApp {
                 self.display_domains_list(ctx);
                 self.display_pretendos_list(ctx);                
             },
-            false => {self.display_loader(ctx)},
+            false => {
+                self.display_loader(ctx);
+                self.listen_events();
+            },
         }
         
-        ctx.set_pixels_per_point(1.5);
-        ctx.clear_animations();   
     }
 }
 pub fn validate_status_code(s: &mut String) {
@@ -133,6 +152,23 @@ pub fn validate_status_code(s: &mut String) {
 pub fn sized_text(s: &str, fill: usize) -> String {
     let filling = " ".repeat(fill);
     return format!("{}{}", s, filling);
+}
+
+pub trait EventListener {
+    fn listen_events(&mut self);
+}
+impl EventListener for MyApp {
+    fn listen_events(&mut self) {
+        if let Ok(msg) = self.rx_gui.try_recv() {
+            if msg == "alive"{
+                self.backend_alive = true;
+                self.populate_data();
+            }
+            if msg == "dead" {
+                self.running_backend_ping_pong = false;
+            }
+        }
+    }
 }
 
 pub trait PretendoHeader {
@@ -195,40 +231,42 @@ pub trait DomainsList {
 
 impl DomainsList for MyApp {
     fn display_domains_list(&mut self, ctx: &egui::Context) {
-        if !self.display_new_domain{
-            let domains: Vec<String> = self.data.clone().into_iter().map(|element| element.domain).collect();
-            let lengths: Vec<i32> = domains.clone().into_iter().map(|element| element.len() as i32).collect();
-            let max = lengths.iter().max().unwrap_or(&1);
-            let default_width = max * 10;
-            SidePanel::left("left_panel").exact_width(default_width as f32).show(ctx, |ui| {
-                ui.heading("Domains");
-                let button = egui::Button::new("➕ Add domain");
-                let button_response = ui.add_sized(egui::vec2(ui.available_size().x, 20.0), button).on_hover_cursor(egui::CursorIcon::PointingHand);
-                if button_response.clicked() {
-                    self.display_new_pretendo = false;
-                    self.current_domain = String::from("");
-                    self.display_new_domain = true;
-                    self.current_pretendo = Pretendo::new();
-                    self.pretendos_in_current_domain = Vec::new();
-                }
-                let _: Vec<_> = domains.iter().map(|domain| {
-                    let label = egui::SelectableLabel::new(self.current_domain == *domain, domain);
-                    let label_response = ui.add_sized(egui::vec2(ui.available_size().x, 20.0), label).on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if label_response.clicked() {
-                        self.webhooks_in_current_pretendo = Vec::new();
-                        self.current_webhook_payload = String::new();
-                        self.current_webhook_url = String::new();
+        if self.backend_alive {
+            if !self.display_new_domain{
+                let domains: Vec<String> = self.data.clone().into_iter().map(|element| element.domain).collect();
+                let lengths: Vec<i32> = domains.clone().into_iter().map(|element| element.len() as i32).collect();
+                let max = lengths.iter().max().unwrap_or(&1);
+                let default_width = max * 10;
+                SidePanel::left("left_panel").exact_width(default_width as f32).show(ctx, |ui| {
+                    ui.heading("Domains");
+                    let button = egui::Button::new("➕ Add domain");
+                    let button_response = ui.add_sized(egui::vec2(ui.available_size().x, 20.0), button).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if button_response.clicked() {
                         self.display_new_pretendo = false;
+                        self.current_domain = String::from("");
+                        self.display_new_domain = true;
                         self.current_pretendo = Pretendo::new();
-                        self.current_domain = domain.clone();
-                        let json_response = block_on(PretendoHttpClient::get_pretendos(&domain));
-                        if let Some(json_response) = json_response {
-                            let pretendos: Vec<Pretendo> = serde_json::from_str(&json_response).unwrap();
-                            self.pretendos_in_current_domain = pretendos;
-                        }
+                        self.pretendos_in_current_domain = Vec::new();
                     }
-                }).collect();
-            });
+                    let _: Vec<_> = domains.iter().map(|domain| {
+                        let label = egui::SelectableLabel::new(self.current_domain == *domain, domain);
+                        let label_response = ui.add_sized(egui::vec2(ui.available_size().x, 20.0), label).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if label_response.clicked() {
+                            self.webhooks_in_current_pretendo = Vec::new();
+                            self.current_webhook_payload = String::new();
+                            self.current_webhook_url = String::new();
+                            self.display_new_pretendo = false;
+                            self.current_pretendo = Pretendo::new();
+                            self.current_domain = domain.clone();
+                            let json_response = block_on(PretendoHttpClient::get_pretendos(&domain));
+                            if let Some(json_response) = json_response {
+                                let pretendos: Vec<Pretendo> = serde_json::from_str(&json_response).unwrap();
+                                self.pretendos_in_current_domain = pretendos;
+                            }
+                        }
+                    }).collect();
+                });
+            }
         }
     }
 }
@@ -239,168 +277,193 @@ pub trait PretendosList {
 
 impl PretendosList for MyApp{
     fn display_pretendos_list(&mut self, ctx: &egui::Context) {
-        let current_pretendo_name = self.current_pretendo.name.clone();
+        if self.backend_alive {
+            let current_pretendo_name = self.current_pretendo.name.clone();
 
-        if !self.display_new_domain && !self.current_domain.is_empty(){
-            TopBottomPanel::top("top_panel").show(ctx, |ui| {
-                ui.heading("Pretendos");
-                ui.horizontal(|ui| {
-    
-                    for item in self.pretendos_in_current_domain.clone() {
-                        let pretendo = item.clone();
-                        let selectable_label = ui.selectable_label(item.name == current_pretendo_name, item.name).on_hover_cursor(egui::CursorIcon::PointingHand);
-                        if selectable_label.clicked(){
+            if !self.display_new_domain && !self.current_domain.is_empty(){
+                TopBottomPanel::top("top_panel").show(ctx, |ui| {
+                    ui.heading("Pretendos");
+                    ui.horizontal(|ui| {
+        
+                        for item in self.pretendos_in_current_domain.clone() {
+                            let pretendo = item.clone();
+                            let selectable_label = ui.selectable_label(item.name == current_pretendo_name, item.name).on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if selectable_label.clicked(){
+                                self.display_new_pretendo = true;
+                                self.current_pretendo = pretendo;
+                                self.webhooks_in_current_pretendo = Vec::new();
+                                self.current_webhook_is_get =false;
+                                self.current_webhook_is_post = false;
+                                self.current_webhook_http_verb = None;
+                                self.current_webhook_payload = String::new();
+                                self.current_webhook_url = String::new();
+
+                            }
+                        }
+                        let button = ui.button("➕ New Pretendo").on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if button.clicked() {
                             self.display_new_pretendo = true;
-                            self.current_pretendo = pretendo;
-                            self.webhooks_in_current_pretendo = Vec::new();
+                            self.current_pretendo = Pretendo::new();
                             self.current_webhook_is_get =false;
                             self.current_webhook_is_post = false;
                             self.current_webhook_http_verb = None;
                             self.current_webhook_payload = String::new();
                             self.current_webhook_url = String::new();
-
                         }
-                    }
-                    let button = ui.button("➕ New Pretendo").on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if button.clicked() {
-                        self.display_new_pretendo = true;
-                        self.current_pretendo = Pretendo::new();
-                        self.current_webhook_is_get =false;
-                        self.current_webhook_is_post = false;
-                        self.current_webhook_http_verb = None;
-                        self.current_webhook_payload = String::new();
-                        self.current_webhook_url = String::new();
-                    }
-    
+        
+                    });
                 });
-            });
-        }
-        if self.display_new_pretendo {     
-            CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical().animated(true).max_height(ui.available_height()).show(ui, |ui| {
-                    let margin_right = 0.0;
-                    let domain_copy = self.current_domain.clone();
-                    let mut url = String::from("Url: 'http://'");
-                    if !self.current_domain.is_empty() {
-                        url = format!("http://{}{}", domain_copy, self.current_pretendo.path);
-                    }
-                    
-                    let tooltip_text = "Click to open in browser";
-                        ui.hyperlink(url).on_hover_text(tooltip_text);
-
-                    ui.horizontal(|ui| {                    
-                        ui.add(egui::Label::new(sized_text("Domain:", 13)));
-                        ui.add_enabled_ui(false, |ui|{
-                            ui.add_sized(egui::vec2(ui.available_size().x - margin_right,20.0), egui::TextEdit::singleline(&mut self.current_domain.clone()));
-                        });
-                        
-                    });
-                    ui.add_space(5.0);
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(sized_text("Name:", 17)));
-                        ui.add_sized(egui::vec2(ui.available_size().x - margin_right, 20.0), egui::TextEdit::singleline(&mut self.current_pretendo.name));
-                    });
-                    ui.add_space(5.0);
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(sized_text("Path:", 20)));
-                        ui.add_sized(egui::vec2(ui.available_size().x - margin_right, 20.0), egui::TextEdit::singleline(&mut self.current_pretendo.path));
-                    });
-                    ui.add_space(5.0);
-
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(sized_text("Return Object:", 1)));
-                        
-                        let win_rect = ctx.input(|i: &egui::InputState| i.screen_rect());
-                        ui.add_sized(
-                            egui::vec2(ui.available_size().x - margin_right, ui.available_size().y + (win_rect.height() - 400.0)), 
-                            TextEdit::multiline(&mut self.current_pretendo.return_object).code_editor().lock_focus(false));
-                        
-                    });
-                    ui.add_space(5.0);
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(sized_text("Status Code:", 5)));
-                        let text_response = ui.add_sized(egui::vec2(30.0 ,20.0), egui::TextEdit::singleline(&mut self.current_pretendo.status_code));
-                        if text_response.changed() {
-                            validate_status_code(&mut self.current_pretendo.status_code);
+            }
+            if self.display_new_pretendo {     
+                CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical().animated(true).max_height(ui.available_height()).show(ui, |ui| {
+                        let margin_right = 0.0;
+                        let domain_copy = self.current_domain.clone();
+                        let mut url = String::from("Url: 'http://'");
+                        if !self.current_domain.is_empty() {
+                            url = format!("http://{}{}", domain_copy, self.current_pretendo.path);
                         }
-                    });
-                    ui.add_space(15.0);
-                    ui.horizontal(|ui:&mut Ui| {
-                        ui.add_sized(egui::vec2(220.0, 30.0), |ui: &mut Ui| {
-                            let element = Button::new("💾 Save pretendo");
-                            let output = ui.add_enabled(self.current_pretendo.id.is_none(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if output.clicked() {
-                                let replaced_return_object = self.current_pretendo.return_object.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
-                                let pretendo_creation = 
-                                    PretendoHttpClient::add_pretendo(
-                                        &self.current_domain, 
-                                        &self.current_pretendo.path, 
-                                        &replaced_return_object,
-                                        &self.current_pretendo.name,
-                                        &self.current_pretendo.status_code);
-                                let pretendo_creation_attempt = block_on(pretendo_creation);
-                                if pretendo_creation_attempt.is_ok(){
-                                    self.display_new_domain = false;
-                                    self.display_new_pretendo = false;
-                                    self.current_pretendo = Pretendo::new();
-                                    let json_response = block_on(PretendoHttpClient::get_pretendos(&self.current_domain));
-                                    if let Some(json_response) = json_response {
-                                        let pretendos: Vec<Pretendo> = serde_json::from_str(&json_response).unwrap();
-                                        self.pretendos_in_current_domain = pretendos.clone();
-                                        let just_created = self.pretendos_in_current_domain.last();
-                                        if just_created.is_some(){
-                                            self.current_pretendo = just_created.unwrap().clone();
-                                            self.display_new_pretendo = true;
-                                            // let json = self.current_pretendo.return_object.clone();
-                                            // let v: Value = serde_json::from_str(&json).unwrap();
-                                            // self.current_pretendo.return_object =  serde_json::to_string_pretty(&v.to_string()).unwrap();
+                        
+                        let tooltip_text = "Click to open in browser";
+                            ui.hyperlink(url).on_hover_text(tooltip_text);
+
+                        ui.horizontal(|ui| {                    
+                            ui.add(egui::Label::new(sized_text("Domain:", 13)));
+                            ui.add_enabled_ui(false, |ui|{
+                                ui.add_sized(egui::vec2(ui.available_size().x - margin_right,20.0), egui::TextEdit::singleline(&mut self.current_domain.clone()));
+                            });
+                            
+                        });
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(sized_text("Name:", 17)));
+                            ui.add_sized(egui::vec2(ui.available_size().x - margin_right, 20.0), egui::TextEdit::singleline(&mut self.current_pretendo.name));
+                        });
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(sized_text("Path:", 20)));
+                            ui.add_sized(egui::vec2(ui.available_size().x - margin_right, 20.0), egui::TextEdit::singleline(&mut self.current_pretendo.path));
+                        });
+                        ui.add_space(5.0);
+
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(sized_text("Return Object:", 1)));
+                            
+                            let win_rect = ctx.input(|i: &egui::InputState| i.screen_rect());
+                            ui.add_sized(
+                                egui::vec2(ui.available_size().x - margin_right, ui.available_size().y + (win_rect.height() - 400.0)), 
+                                TextEdit::multiline(&mut self.current_pretendo.return_object).code_editor().lock_focus(false));
+                            
+                        });
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(sized_text("Status Code:", 5)));
+                            let text_response = ui.add_sized(egui::vec2(30.0 ,20.0), egui::TextEdit::singleline(&mut self.current_pretendo.status_code));
+                            if text_response.changed() {
+                                validate_status_code(&mut self.current_pretendo.status_code);
+                            }
+                        });
+                        ui.add_space(15.0);
+                        ui.horizontal(|ui:&mut Ui| {
+                            ui.add_sized(egui::vec2(220.0, 30.0), |ui: &mut Ui| {
+                                let element = Button::new("💾 Save pretendo");
+                                let output = ui.add_enabled(self.current_pretendo.id.is_none(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if output.clicked() {
+                                    let replaced_return_object = self.current_pretendo.return_object.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
+                                    let pretendo_creation = 
+                                        PretendoHttpClient::add_pretendo(
+                                            &self.current_domain, 
+                                            &self.current_pretendo.path, 
+                                            &replaced_return_object,
+                                            &self.current_pretendo.name,
+                                            &self.current_pretendo.status_code);
+                                    let pretendo_creation_attempt = block_on(pretendo_creation);
+                                    if pretendo_creation_attempt.is_ok(){
+                                        self.display_new_domain = false;
+                                        self.display_new_pretendo = false;
+                                        self.current_pretendo = Pretendo::new();
+                                        let json_response = block_on(PretendoHttpClient::get_pretendos(&self.current_domain));
+                                        if let Some(json_response) = json_response {
+                                            let pretendos: Vec<Pretendo> = serde_json::from_str(&json_response).unwrap();
+                                            self.pretendos_in_current_domain = pretendos.clone();
+                                            let just_created = self.pretendos_in_current_domain.last();
+                                            if just_created.is_some(){
+                                                self.current_pretendo = just_created.unwrap().clone();
+                                                self.display_new_pretendo = true;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            output
-                        });
-                        ui.add_sized(egui::vec2(220.0, 30.0), |ui: &mut Ui| {
-                            let element = Button::new("Configure Webhook(s)");
-                            let output = ui.add_enabled(self.current_pretendo.id.is_some(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if output.clicked() {
-                                logger::debug::println!("Configuring webhooks");
-                                let json_response = block_on(connections::http::PretendoHttpClient::get_webhooks(&self.current_pretendo.id.unwrap()));
-                                logger::debug::println!("{:?}", json_response);
-                                if let Some(json_response) = json_response {
-                                    let webhooks: Vec<Webhook> = serde_json::from_str(&json_response).unwrap();
-                                    logger::debug::println!("webhooks for current pretendo {:?}",webhooks);
-                                    self.webhooks_in_current_pretendo = webhooks;
-                                    if self.webhooks_in_current_pretendo.len() > 0 {
-                                        let current_webhook = self.webhooks_in_current_pretendo.first().cloned().unwrap();
-                                        self.current_webhook_payload = current_webhook.payload;
-                                        self.current_webhook_url = current_webhook.url;
-                                        self.current_webhook_http_verb = Some(current_webhook.http_verb);
+                                output
+                            });
+                            ui.add_sized(egui::vec2(220.0, 30.0), |ui: &mut Ui| {
+                                let element = Button::new("Configure Webhook(s)");
+                                let output = ui.add_enabled(self.current_pretendo.id.is_some(), element).on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if output.clicked() {
+                                    logger::debug::println!("Configuring webhooks");
+                                    let json_response = block_on(connections::http::PretendoHttpClient::get_webhooks(&self.current_pretendo.id.unwrap()));
+                                    logger::debug::println!("{:?}", json_response);
+                                    if let Some(json_response) = json_response {
+                                        let webhooks: Vec<Webhook> = serde_json::from_str(&json_response).unwrap();
+                                        logger::debug::println!("webhooks for current pretendo {:?}",webhooks);
+                                        self.webhooks_in_current_pretendo = webhooks;
+                                        if self.webhooks_in_current_pretendo.len() > 0 {
+                                            let current_webhook = self.webhooks_in_current_pretendo.first().cloned().unwrap();
+                                            self.current_webhook_payload = current_webhook.payload;
+                                            self.current_webhook_url = current_webhook.url;
+                                            self.current_webhook_http_verb = Some(current_webhook.http_verb);
+                                        }
+                                        else{
+                                            self.current_webhook_payload = String::new();
+                                            self.current_webhook_url = String::new();
+                                            self.current_webhook_http_verb = None;
+                                        }
                                     }
-                                    else{
-                                        self.current_webhook_payload = String::new();
-                                        self.current_webhook_url = String::new();
-                                        self.current_webhook_http_verb = None;
-                                    }
+                                    self.display_configure_webhooks = true;
                                 }
-                                self.display_configure_webhooks = true;
-                            }
-                            output
+                                output
+                            });
                         });
                     });
                 });
-            });
+            }
         }
     }
 }
 
 pub trait BackendAlive {
-    fn is_backend_alive(& mut self, ctx: &egui::Context) -> bool;
+    fn check_backend(& mut self, ctx: &egui::Context);
 }
 
 impl BackendAlive for MyApp {
-    fn is_backend_alive(& mut self, _ctx: &egui::Context) -> bool {
-        return block_on(PretendoHttpClient::backend_alive());
+    fn check_backend(& mut self, ctx: &egui::Context) {
+        if !self.backend_alive && !self.running_backend_ping_pong {
+            self.running_backend_ping_pong = true;
+            self.data = Vec::new();
+            let frame = ctx.clone();
+            let tx_gui = self.tx_gui.clone();
+            tokio::spawn(async move {
+                let alive = PretendoHttpClient::backend_alive().await;
+                if alive {
+                    tx_gui.send("alive".to_string()).expect("Failed to send message");
+                    logger::debug::println!("message sent!");
+                }
+                else {
+                    tx_gui.send("dead".to_string()).expect("Failed to send message");
+                    logger::debug::println!("message sent!");
+                }
+                frame.request_repaint_after_secs(3.0);
+            });
+        }
+        if self.backend_alive && self.data.is_empty() {
+            let mut pretendos = Vec::new();
+            let domains_call = PretendoHttpClient::get_domains();
+            let domains = block_on(domains_call);
+            for domain in domains {
+                pretendos.push(PretendoElement { domain: domain, pretendos: [Pretendo::new()].to_vec()})
+            }
+            self.data = pretendos;
+        }
     }
 }
 
@@ -410,125 +473,126 @@ pub trait PretendoLoader {
 
 impl PretendoLoader for MyApp {
     fn display_loader(&mut self, ctx: &egui::Context) {
-        TopBottomPanel::top("top_panel_0").show_animated(ctx,!self.backend_alive, |ui| {
-            ui.heading("Pretendo App    🐼");
+        TopBottomPanel::top("panel_loader").show_animated(ctx,!self.backend_alive, |ui| {
             ui.label(r#"Backend not runnning....
             - Pretendo Backend must be running for the PRETENDO UI to work."#);
-            let button_widget = egui::Button::new("Reload ↻");                    
-                    
-            let button_response = ui.add_enabled(true, button_widget).on_hover_cursor(egui::CursorIcon::PointingHand);
-
-            if button_response.clicked() {
-                self.backend_alive = block_on(PretendoHttpClient::backend_alive());
-            }
+            ui.add_space(15.0);
+            ui.vertical_centered( |ui|{
+                
+                let button_widget = egui::Button::new("  Reload  ↻  ");                    
+                
+                let button_response = ui.add_visible(!self.backend_alive, button_widget).on_hover_cursor(egui::CursorIcon::PointingHand);
+                
+                ui.add_visible(self.running_backend_ping_pong, egui::widgets::Spinner::new());
+                if button_response.clicked() {
+                    self.check_backend(ctx);
+                }
+            });
         });
     }
 }
-
 pub trait NewWebhookWindow{
     fn configure_new_webhook_window(&mut self, ctx: &egui::Context);
 }
 
 impl NewWebhookWindow for MyApp {
     fn configure_new_webhook_window(&mut self, ctx: &egui::Context) {
-        let mut should_display = self.display_configure_webhooks;
-        if self.current_webhook_http_verb.is_some(){
-            let current_value = self.current_webhook_http_verb.clone().unwrap();
-            if current_value == HttpVerbs::GET{
-                self.current_webhook_is_get = true;
-            }
-            if current_value == HttpVerbs::POST{
-                self.current_webhook_is_post = true;
-            }
-        }
-        if  should_display {
-            let webhook_window = egui::Window::new("Configure Webhooks")
-            .collapsible(false)
-            .open(&mut self.display_configure_webhooks)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(egui::Label::new(sized_text("Url:", 11)));
-                    let text_response = ui.add_sized(egui::vec2(ui.available_size().x ,20.0), egui::TextEdit::singleline(&mut self.current_webhook_url));
-                    if text_response.changed() {
-                        //validate_status_code(&mut self.current_pretendo.status_code);
-                    }
-                });
-
-                ui.add_space(2.5);
-                ui.horizontal(|ui| {
-                ui.add(egui::Label::new(sized_text("Verb:", 8)));
-
-                    let get_option = ui.checkbox(&mut self.current_webhook_is_get, "HTTP GET");
-                    if get_option.clicked(){
-                        if self.current_webhook_is_get
-                        {
-                            self.current_webhook_http_verb = Some(HttpVerbs::GET); 
-                            self.current_webhook_is_post = false;   
-                        }
-                    }
-                    let post_option = ui.checkbox(&mut self.current_webhook_is_post, "HTTP POST");
-                    if post_option.clicked(){
-                        if self.current_webhook_is_post
-                        {
-                            self.current_webhook_http_verb = Some(HttpVerbs::POST);
-                            self.current_webhook_is_get = false; 
-                        }
-                    }
-                });
-                ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    let widget = egui::TextEdit::multiline(&mut self.current_webhook_payload)
-                    .font(egui::TextStyle::Monospace) // for cursor height
-                    .code_editor()
-                    .desired_rows(10)
-                    .lock_focus(false)
-                    .desired_width(f32::INFINITY);
-                    // .layouter(&mut layouter),
-
-                    ui.add(egui::Label::new(sized_text("Payload:", 1)));
-                    
-                    egui::ScrollArea::vertical().min_scrolled_height(300.0).show(ui, |ui| {
-
-                        ui.add_sized(egui::vec2(ui.available_size().x, 300.0), |ui: &mut Ui|{
-                            let enabled_widget = ui.add_enabled(  self.current_webhook_is_post, widget);
-                            
-                            return enabled_widget;
-                        });
-                    });
-                    
-                });
-                ui.add_space(5.0);
-                let enabled = self.webhooks_in_current_pretendo.len() == 0 && !self.current_webhook_url.is_empty() && (self.current_webhook_is_get || self.current_webhook_is_post);
-
-                let button_widget = egui::Button::new("Save Webhook configuration");                    
-                
-                let button_response = ui.add_enabled(enabled, button_widget).on_hover_cursor(egui::CursorIcon::PointingHand);
-
-                if button_response.clicked(){
-                    if !self.current_webhook_url.is_empty(){
-                        let fixed_payload = self.current_webhook_payload.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
-                        let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload, &self.current_webhook_http_verb.clone().unwrap())).unwrap();
-                        logger::debug::println!("attempted to save webhook, success: {:?}", success);
-                        should_display = false;
-                        if success{
-                            self.current_webhook_url = String::new();
-                            self.current_webhook_payload = String::new();
-                            self.current_webhook_is_get = false;
-                            self.current_webhook_is_post = false;
-                            self.current_webhook_http_verb = None;
-                        }
-                    }
+        if self.backend_alive {
+            let mut should_display = self.display_configure_webhooks;
+            if self.current_webhook_http_verb.is_some(){
+                let current_value = self.current_webhook_http_verb.clone().unwrap();
+                if current_value == HttpVerbs::GET{
+                    self.current_webhook_is_get = true;
                 }
-            });
-            //close window event
-            if webhook_window.is_none(){
-                self.current_webhook_url = String::new();
-                self.current_webhook_payload = String::new();
-                self.current_webhook_is_get = false;
-                self.current_webhook_is_post = false;
-                self.current_webhook_http_verb = None;
+                if current_value == HttpVerbs::POST{
+                    self.current_webhook_is_post = true;
+                }
             }
+            if  should_display {
+                let webhook_window = egui::Window::new("Configure Webhooks")
+                .collapsible(false)
+                .open(&mut self.display_configure_webhooks)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Label::new(sized_text("Url:", 11)));
+                        let text_response = ui.add_sized(egui::vec2(ui.available_size().x ,20.0), egui::TextEdit::singleline(&mut self.current_webhook_url));
+                    });
+
+                    ui.add_space(2.5);
+                    ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(sized_text("Verb:", 8)));
+
+                        let get_option = ui.checkbox(&mut self.current_webhook_is_get, "HTTP GET");
+                        if get_option.clicked(){
+                            if self.current_webhook_is_get
+                            {
+                                self.current_webhook_http_verb = Some(HttpVerbs::GET); 
+                                self.current_webhook_is_post = false;   
+                            }
+                        }
+                        let post_option = ui.checkbox(&mut self.current_webhook_is_post, "HTTP POST");
+                        if post_option.clicked(){
+                            if self.current_webhook_is_post
+                            {
+                                self.current_webhook_http_verb = Some(HttpVerbs::POST);
+                                self.current_webhook_is_get = false; 
+                            }
+                        }
+                    });
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        let widget = egui::TextEdit::multiline(&mut self.current_webhook_payload)
+                        .font(egui::TextStyle::Monospace) // for cursor height
+                        .code_editor()
+                        .desired_rows(10)
+                        .lock_focus(false)
+                        .desired_width(f32::INFINITY);
+
+                        ui.add(egui::Label::new(sized_text("Payload:", 1)));
+                        
+                        egui::ScrollArea::vertical().min_scrolled_height(300.0).show(ui, |ui| {
+
+                            ui.add_sized(egui::vec2(ui.available_size().x, 300.0), |ui: &mut Ui|{
+                                let enabled_widget = ui.add_enabled(  self.current_webhook_is_post, widget);
+                                
+                                return enabled_widget;
+                            });
+                        });
+                        
+                    });
+                    ui.add_space(5.0);
+                    let enabled = self.webhooks_in_current_pretendo.len() == 0 && !self.current_webhook_url.is_empty() && (self.current_webhook_is_get || self.current_webhook_is_post);
+
+                    let button_widget = egui::Button::new("Save Webhook configuration");                    
+                    
+                    let button_response = ui.add_enabled(enabled, button_widget).on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    if button_response.clicked(){
+                        if !self.current_webhook_url.is_empty(){
+                            let fixed_payload = self.current_webhook_payload.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
+                            let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload, &self.current_webhook_http_verb.clone().unwrap())).unwrap();
+                            logger::debug::println!("attempted to save webhook, success: {:?}", success);
+                            should_display = false;
+                            if success{
+                                self.current_webhook_url = String::new();
+                                self.current_webhook_payload = String::new();
+                                self.current_webhook_is_get = false;
+                                self.current_webhook_is_post = false;
+                                self.current_webhook_http_verb = None;
+                            }
+                        }
+                    }
+                });
+                //close window event
+                if webhook_window.is_none(){
+                    self.current_webhook_url = String::new();
+                    self.current_webhook_payload = String::new();
+                    self.current_webhook_is_get = false;
+                    self.current_webhook_is_post = false;
+                    self.current_webhook_http_verb = None;
+                }
+            }
+            self.display_configure_webhooks &= should_display;
         }
-        self.display_configure_webhooks &= should_display;
     }
 }
