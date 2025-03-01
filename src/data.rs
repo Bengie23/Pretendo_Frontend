@@ -29,6 +29,7 @@ pub mod entities
         pub url: String,
         pub payload: String,
         pub http_verb: HttpVerbs,
+        pub delay: i32
     }
 
     impl Pretendo {

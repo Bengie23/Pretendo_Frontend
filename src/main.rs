@@ -10,7 +10,7 @@ mod connections;
 mod logger;
 mod data;
 
-use eframe::egui::{self, Button, CentralPanel, SidePanel, TextEdit, TopBottomPanel, Visuals};
+use eframe::{egui::{self, Button, CentralPanel, SidePanel, TextEdit, TopBottomPanel, Visuals}, emath::Numeric};
 use connections::http::PretendoHttpClient;
 use futures::executor::block_on;
 use egui::Ui;
@@ -61,6 +61,7 @@ struct MyApp {
     running_backend_ping_pong:bool,
     rx_gui: UnboundedReceiver<String>,
     tx_gui: UnboundedSender<String>,
+    current_webhook_delay: i32,
     
 }
 
@@ -118,6 +119,7 @@ impl MyApp {
             running_backend_ping_pong: false,
             tx_gui: tx,
             rx_gui: rx,
+            current_webhook_delay: 0,
 
         }
     }
@@ -297,6 +299,7 @@ impl PretendosList for MyApp{
                                 self.current_webhook_http_verb = None;
                                 self.current_webhook_payload = String::new();
                                 self.current_webhook_url = String::new();
+                                self.current_webhook_delay = 0;
 
                             }
                         }
@@ -309,6 +312,7 @@ impl PretendosList for MyApp{
                             self.current_webhook_http_verb = None;
                             self.current_webhook_payload = String::new();
                             self.current_webhook_url = String::new();
+                            self.current_webhook_delay = 0;
                         }
         
                     });
@@ -412,11 +416,13 @@ impl PretendosList for MyApp{
                                             self.current_webhook_payload = current_webhook.payload;
                                             self.current_webhook_url = current_webhook.url;
                                             self.current_webhook_http_verb = Some(current_webhook.http_verb);
+                                            self.current_webhook_delay = current_webhook.delay;
                                         }
                                         else{
                                             self.current_webhook_payload = String::new();
                                             self.current_webhook_url = String::new();
                                             self.current_webhook_http_verb = None;
+                                            self.current_webhook_delay = 0;
                                         }
                                     }
                                     self.display_configure_webhooks = true;
@@ -560,7 +566,13 @@ impl NewWebhookWindow for MyApp {
                         });
                         
                     });
-                    ui.add_space(5.0);
+                    ui.add_space(2.5);
+                    ui.horizontal(|ui|{
+                        ui.add(egui::Label::new(sized_text("Delay:", 7)));
+                        ui.add(egui::Slider::new( &mut self.current_webhook_delay, 0..=60).suffix(" secs"));
+                    });
+                    
+                    ui.add_space(2.5);
                     let enabled = self.webhooks_in_current_pretendo.len() == 0 && !self.current_webhook_url.is_empty() && (self.current_webhook_is_get || self.current_webhook_is_post);
 
                     let button_widget = egui::Button::new("Save Webhook configuration");                    
@@ -570,7 +582,7 @@ impl NewWebhookWindow for MyApp {
                     if button_response.clicked(){
                         if !self.current_webhook_url.is_empty(){
                             let fixed_payload = self.current_webhook_payload.clone().replace("\t", "").replace("\n", "").replace("\"", "'");
-                            let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload, &self.current_webhook_http_verb.clone().unwrap())).unwrap();
+                            let success = block_on(connections::http::PretendoHttpClient::add_webhook(&self.current_pretendo.id.unwrap(), &self.current_webhook_url, &fixed_payload, &self.current_webhook_http_verb.clone().unwrap(), &self.current_webhook_delay)).unwrap();
                             logger::debug::println!("attempted to save webhook, success: {:?}", success);
                             should_display = false;
                             if success{
@@ -579,6 +591,7 @@ impl NewWebhookWindow for MyApp {
                                 self.current_webhook_is_get = false;
                                 self.current_webhook_is_post = false;
                                 self.current_webhook_http_verb = None;
+                                self.current_webhook_delay = 0;
                             }
                         }
                     }
@@ -590,6 +603,7 @@ impl NewWebhookWindow for MyApp {
                     self.current_webhook_is_get = false;
                     self.current_webhook_is_post = false;
                     self.current_webhook_http_verb = None;
+                    self.current_webhook_delay = 0;
                 }
             }
             self.display_configure_webhooks &= should_display;

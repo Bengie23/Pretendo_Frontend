@@ -155,10 +155,10 @@ pub mod http {
             
         }
         
-        pub async fn add_webhook(pretendo_id: &i32, webhook_url: &String, payload: &String, verb: &HttpVerbs) ->Result<bool,Error>{
+        pub async fn add_webhook(pretendo_id: &i32, webhook_url: &String, payload: &String, verb: &HttpVerbs, delay: &i32) ->Result<bool,Error>{
             let url = format!("http://pretendo.local/api/pretendo/{}/webhooks", pretendo_id);
             let payload_json = format!(r#"{}"#, payload);
-            let json_data = format!(r##"{{ "url":"{}","payload":"{}", "httpVerb":"{}"}}"##, webhook_url, payload_json, verb);
+            let json_data = format!(r##"{{ "url":"{}","payload":"{}", "httpVerb":"{}", "delay":{}}}"##, webhook_url, payload_json, verb, delay);
             logger::debug::println!("{}", json_data);
             
             let client = reqwest::Client::new();
