@@ -26,12 +26,15 @@ jobs:
         # A file, directory or wildcard pattern that describes what to upload
         path: ${{ github.workspace }}/target/release/Pretendo_Frontend.exe
         # The desired behavior if no files are found using the provided path.      
-    - name: Download a Build Artifact
-      uses: actions/download-artifact@v4.1.8
+    - name: Create Release
+      if: github.ref == 'refs/heads/master'
+      uses: softprops/action-gh-release@v1
       with:
-        # Name of the artifact to download. If unspecified, all artifacts for the run are downloaded.
-        name: executable
-        # Destination path. Supports basic tilde expansion. Defaults to $GITHUB_WORKSPACE
-        path: ${{ github.workspace }}/artifacts
+        tag_name: v${{ github.run_number }}
+        name: Release v${{ github.run_number }}
+        files: ${{ github.workspace }}/target/release/Pretendo_Frontend.exe
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
           
