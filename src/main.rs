@@ -20,18 +20,31 @@ mod pretendo_loader;
 mod backend_alive;
 mod event_listener;
 
-
 use app::MyApp;
 use associator::Associator;
 use eframe::egui::{self, Visuals};
 use regex::Regex;
 use tokio::sync::mpsc;
 
+
 #[tokio::main]
 async fn main() -> eframe::Result {
+    let image = image::load_from_memory(include_bytes!("../assets/pretendo-panda.png"))
+            .unwrap()
+            .to_rgba8();
+    let (width, height) = image.dimensions();
     let options = eframe::NativeOptions {
         centered: true,
-        viewport: egui::ViewportBuilder::default().with_resizable(true).with_maximize_button(false).with_inner_size([1000.0, 700.0]).with_min_inner_size([840.0,700.0]),        
+        viewport: egui::ViewportBuilder::default()
+            .with_icon(std::sync::Arc::new(egui::IconData {
+                rgba: image.to_vec(),
+                width,
+                height,
+            }))
+            .with_resizable(true)
+            .with_maximize_button(false)
+            .with_inner_size([1000.0, 700.0])
+            .with_min_inner_size([840.0,700.0]),        
         ..Default::default()
     };
     let (tx_gui, rx_gui) = mpsc::unbounded_channel::<String>();
